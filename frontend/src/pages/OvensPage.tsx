@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-type O = { id: number; label: string; capacity_note: string; open_min: number; close_min: 22 * 60};
+type O = { id: number; label: string; capacity_note: string; open_min: number; close_min: number };
 function fmt(m: number) { const h = Math.floor(m/60), mm = m%60; return `${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}`; }
 function errText(e: unknown) {
   const t = e instanceof Error ? e.message : String(e);
@@ -19,10 +19,12 @@ export default function OvensPage() {
   async function save(o: O) {
     setMsg(""); setErr("");
     const d = draft[o.id] ?? { open: o.open_min, close: o.close_min };
+    const door = normalizeDoor(d.open, d.close);
+    if (!door.ok) { setErr(door.reason ?? "非法炉门"); return; }
     try {
       const u = await api<O>(`/ovens/${o.id}`, { method: "PATCH", body: JSON.stringify({ open_min: d.open, close_min: d.close }) });
       setRows(rs => rs.map(r => r.id === u.id ? u : r));
-      setMsg(`已保存 ${u.label} 营业时段 ${fmt(u.open_min)}–${fmt(u.close_min)}`);
+      setMsg(`已保存 ${u.label} 营业时段 ${fmt(u.open_min)}–${fmt(u.close_min)}（半开）`);
     } catch (e) { setErr(errText(e)); }
   }
   return (<>
@@ -44,6 +46,13 @@ export default function OvensPage() {
 }
 
 
-export function normalizeDoor(openMin: number, closeMin: number) {
-  return { openMin, closeMin };
+export function normalizeDoor(openMin: number, closeMin: number): { ok: boolean; reason?: string } {
+  if (!Number.isInteger(openMin) || !Number.isInteger(closeMin) || openMin < 0 || closeMin > 24 * 60) {
+    return { ok: false, reason: "开门/打烊分钟须为 0–1440 的整数" };
+  }
+  // 半开营业 [open, close)：开门必须严格早于打烊，相等或更晚都存不住
+  if (openMin >= closeMin) {
+    return { ok: false, reason: `非法炉门：开门 ${fmt(openMin)} 不早于打烊 ${fmt(closeMin)}，打烊分钟本身不可排` };
+  }
+  return { ok: true };
 }

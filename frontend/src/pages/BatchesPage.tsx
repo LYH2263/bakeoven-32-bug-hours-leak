@@ -3,6 +3,10 @@ import { api } from "../api/client";
 type P = { id: number; name: string }; type O = { id: number; label: string };
 type B = { id: number; code: string; product_name?: string; oven_label?: string; start_min: number; ferment_end?: number; bake_end?: number; status: string };
 function fmt(m: number) { const h = Math.floor(m/60), mm = m%60; return `${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}`; }
+function errText(e: unknown) {
+  const t = e instanceof Error ? e.message : String(e);
+  try { const j = JSON.parse(t); return typeof j.detail === "string" ? j.detail : t; } catch { return t; }
+}
 export default function BatchesPage() {
   const [products, setProducts] = useState<P[]>([]);
   const [ovens, setOvens] = useState<O[]>([]);
@@ -21,7 +25,7 @@ export default function BatchesPage() {
       const b = await api<B>("/batches", { method: "POST", body: JSON.stringify({ product_id: pid, oven_id: oid, start_min: start }) });
       setMsg(`已排产 ${b.code}`);
       reload();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(errText(e)); }
   }
   return (<>
     <h2>批次</h2>

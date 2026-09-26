@@ -1,3 +1,4 @@
+from app.schemas.schemas import OvenHoursUpdate
 from app.services.oven_engine import (
     Interval,
     Occupancy,
@@ -6,7 +7,11 @@ from app.services.oven_engine import (
     find_conflicts,
     fits_operating_hours,
     next_free_window,
+    operating_band,
+    shop_wide_hours,
 )
+import pytest
+from pydantic import ValidationError
 
 
 def test_half_open_no_touch_conflict():
@@ -75,3 +80,36 @@ def test_next_free_window_within_custom_hours():
     assert next_free_window([], 1, duration=120, search_from=600, search_to=700) is None
     # 窗口可恰好收于打烊点
     assert next_free_window([], 1, duration=100, search_from=600, search_to=700) == Interval(600, 700)
+
+
+def test_operating_band_uses_configured_door():
+    assert operating_band(9 * 60, 20 * 60) == (540, 1200)
+    assert operating_band(0, 24 * 60) == (0, 1440)
+
+
+def test_operating_band_unconfigured_falls_back_to_8_22():
+    assert operating_band(None, None) == shop_wide_hours() == (480, 1320)
+
+
+def test_operating_band_illegal_door_falls_back_to_8_22():
+    # 开门等于打烊、打烊更早都属于非法存量数据，按现网 8–22 兜底
+    assert operating_band(600, 600) == (480, 1320)
+    assert operating_band(1200, 600) == (480, 1320)
+
+
+def test_operating_hours_empty_rejected():
+    assert not fits_operating_hours([], 480, 1320)
+
+
+@pytest.mark.parametrize("open_min,close_min", [(600, 600), (1200, 600), (0, 0)])
+def test_oven_hours_update_rejects_non_half_open_door(open_min, close_min):
+    with pytest.raises(ValidationError):
+        OvenHoursUpdate(open_min=open_min, close_min=close_min)
+
+
+def test_oven_hours_update_accepts_strictly_open_door():
+    u = OvenHoursUpdate(open_min=480, close_min=1320)
+    assert (u.open_min, u.close_min) == (480, 1320)
+    # 1 分钟的门也是合法半开区间
+    assert OvenHoursUpdate(open_min=0, close_min=1).close_min == 1
+

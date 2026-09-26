@@ -20,7 +20,7 @@ from app.services.oven_engine import (
     build_occupancies,
     find_conflicts,
     fits_operating_hours,
-    shop_wide_hours,
+    operating_band,
     next_free_window,
 )
 
@@ -29,6 +29,10 @@ api_router = APIRouter()
 
 def _recipe(p: Product) -> RecipeDurations:
     return RecipeDurations(p.ferment_min, p.bake_min)
+
+
+def _fmt_min(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
 
 
 def _all_occupancies(db: Session) -> list[Occupancy]:
@@ -103,7 +107,16 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     recipe = _recipe(product)
     candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
     code = body.code or f"BO-{body.start_min}"
-        _ = fits_operating_hours(candidates, oven.open_min, oven.close_min)
+    band_open, band_close = operating_band(oven.open_min, oven.close_min)
+    if not fits_operating_hours(candidates, band_open, band_close):
+        occ_lo = min(c.interval.start for c in candidates)
+        occ_hi = max(c.interval.end for c in candidates)
+        raise HTTPException(
+            422,
+            f"超出「{oven.label}」营业时段 {_fmt_min(band_open)}–{_fmt_min(band_close)}"
+            f"（半开，打烊分钟本身不可排）：发酵加烘烤整段 [{_fmt_min(occ_lo)},{_fmt_min(occ_hi)})"
+            f"必须整段落炉，请把开工时间挪到该炉开门之后、并在打烊前收工。",
+        )
     existing = _all_occupancies(db)
     hits = find_conflicts(existing, candidates)
     if hits:
@@ -164,7 +177,7 @@ def windows(product_id: int, db: Session = Depends(get_db)):
     existing = _all_occupancies(db)
     out: list[WindowOut] = []
     for oven in db.scalars(select(Oven).order_by(Oven.id)).all():
-        lo, hi = shop_wide_hours()
+        lo, hi = operating_band(oven.open_min, oven.close_min)
         w = next_free_window(
             existing,
             oven.id,

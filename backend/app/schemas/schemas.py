@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProductOut(BaseModel):
@@ -22,6 +22,13 @@ class OvenOut(BaseModel):
 class OvenHoursUpdate(BaseModel):
     open_min: int = Field(ge=0, le=24 * 60)
     close_min: int = Field(ge=0, le=24 * 60)
+
+    @model_validator(mode="after")
+    def _door_must_be_half_open(self) -> "OvenHoursUpdate":
+        # 半开营业 [open_min, close_min)：开门必须严格早于打烊
+        if self.open_min >= self.close_min:
+            raise ValueError("开门时间必须早于打烊时间（打烊分钟本身不可排）")
+        return self
 
 
 class BatchOut(BaseModel):
