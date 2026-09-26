@@ -5,7 +5,10 @@ from app.services.oven_engine import (
     build_occupancies,
     find_conflicts,
     fits_operating_hours,
+    hours_band_for_gantt,
+    is_valid_door,
     next_free_window,
+    resolve_oven_hours,
 )
 
 
@@ -75,3 +78,59 @@ def test_next_free_window_within_custom_hours():
     assert next_free_window([], 1, duration=120, search_from=600, search_to=700) is None
     # 窗口可恰好收于打烊点
     assert next_free_window([], 1, duration=100, search_from=600, search_to=700) == Interval(600, 700)
+
+
+def test_resolve_hours_unconfigured_falls_back():
+    assert resolve_oven_hours(None, None) == (480, 1320)
+    assert resolve_oven_hours(600, None) == (480, 1320)
+    assert resolve_oven_hours(None, 1200) == (480, 1320)
+
+
+def test_resolve_hours_invalid_door_falls_back():
+    assert resolve_oven_hours(1200, 1200) == (480, 1320)  # 开门即打烊
+    assert resolve_oven_hours(1300, 600) == (480, 1320)   # 打烊更早
+
+
+def test_resolve_hours_custom_door_kept():
+    assert resolve_oven_hours(600, 1200) == (600, 1200)
+
+
+def test_fits_unconfigured_uses_shop_band():
+    recipe = RecipeDurations(20, 30)
+    # 未配门：按 8–22 判断，8:00 整开工、22:00 整收工都允许
+    assert fits_operating_hours(build_occupancies(1, 9, 480, recipe), None, None)
+    assert fits_operating_hours(build_occupancies(1, 9, 1270, recipe), None, None)
+    assert not fits_operating_hours(build_occupancies(1, 9, 470, recipe), None, None)
+    assert not fits_operating_hours(build_occupancies(1, 9, 1290, recipe), None, None)
+
+
+def test_fits_custom_door_whole_occupancy_inside():
+    recipe = RecipeDurations(30, 30)
+    # 炉门 10:00–11:00：[600,660) 整段在内
+    assert fits_operating_hours(build_occupancies(1, 9, 600, recipe), 600, 660)
+    # 发酵在内但烘烤探出打烊 → 拒绝
+    assert not fits_operating_hours(build_occupancies(1, 9, 610, recipe), 600, 660)
+    # 早于该炉开门 → 拒绝，即使还在全店 8–22 之内
+    assert not fits_operating_hours(build_occupancies(1, 9, 580, recipe), 600, 660)
+
+
+def test_fits_zero_length_segments_ignored():
+    # 发酵时长为 0（布朗尼类配方）：只看烘烤段
+    recipe = RecipeDurations(0, 30)
+    assert fits_operating_hours(build_occupancies(1, 9, 630, recipe), 600, 660)
+    assert not fits_operating_hours(build_occupancies(1, 9, 640, recipe), 600, 660)
+
+
+def test_gantt_band_matches_oven_door():
+    assert hours_band_for_gantt(600, 1200) == (600, 1200)
+    assert hours_band_for_gantt(None, None) == (480, 1320)
+    assert hours_band_for_gantt(1200, 600) == (480, 1320)
+
+
+def test_is_valid_door_rules():
+    assert is_valid_door(None, None)          # 未配门，合法
+    assert is_valid_door(480, 1320)           # 正常门
+    assert not is_valid_door(1200, 1200)      # 开门即打烊
+    assert not is_valid_door(1300, 600)       # 打烊更早
+    assert not is_valid_door(600, None)       # 只填一端
+    assert not is_valid_door(None, 1200)

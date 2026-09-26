@@ -5,7 +5,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-
 class Product(Base):
     __tablename__ = "products"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -19,9 +18,10 @@ class Oven(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     label: Mapped[str] = mapped_column(String(40), unique=True)
     capacity_note: Mapped[str] = mapped_column(String(80), default="")
-    # 营业时段为半开区间 [open_min, close_min)：打烊分钟本身不可排
-    open_min: Mapped[int] = mapped_column(Integer, default=8 * 60)
-    close_min: Mapped[int] = mapped_column(Integer, default=22 * 60)
+    # 营业时段为半开区间 [open_min, close_min)：打烊分钟本身不可排。
+    # None 表示该炉尚未单独配门，排产与甘特回退到全店默认 08:00–22:00。
+    open_min: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    close_min: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 
 
 class Batch(Base):

@@ -11,16 +11,24 @@ from app.services.seed import seed_if_empty
 
 
 def _ensure_oven_hour_columns() -> None:
-    """Add open_min/close_min to pre-existing ovens tables (create_all won't alter)."""
+    """Add open_min/close_min to pre-existing ovens tables (create_all won't alter).
+
+    New tables get nullable columns straight from the model; columns added to
+    old deployments were NOT NULL, so drop that constraint — NULL means the
+    oven has no door configured and falls back to shop-wide 08:00–22:00.
+    """
     inspector = inspect(engine)
     if "ovens" not in inspector.get_table_names():
         return
-    cols = {c["name"] for c in inspector.get_columns("ovens")}
+    cols = {c["name"]: c for c in inspector.get_columns("ovens")}
     with engine.begin() as conn:
         if "open_min" not in cols:
-            conn.execute(text("ALTER TABLE ovens ADD COLUMN open_min INTEGER NOT NULL DEFAULT 480"))
+            conn.execute(text("ALTER TABLE ovens ADD COLUMN open_min INTEGER"))
         if "close_min" not in cols:
-            conn.execute(text("ALTER TABLE ovens ADD COLUMN close_min INTEGER NOT NULL DEFAULT 1320"))
+            conn.execute(text("ALTER TABLE ovens ADD COLUMN close_min INTEGER"))
+        if engine.dialect.name != "sqlite":
+            conn.execute(text("ALTER TABLE ovens ALTER COLUMN open_min DROP NOT NULL"))
+            conn.execute(text("ALTER TABLE ovens ALTER COLUMN close_min DROP NOT NULL"))
 
 
 @asynccontextmanager

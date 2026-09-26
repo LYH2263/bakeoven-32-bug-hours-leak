@@ -14,14 +14,15 @@ class OvenOut(BaseModel):
     id: int
     label: str
     capacity_note: str
-    open_min: int
-    close_min: int
+    open_min: int | None = None
+    close_min: int | None = None
     model_config = {"from_attributes": True}
 
 
 class OvenHoursUpdate(BaseModel):
-    open_min: int = Field(ge=0, le=24 * 60)
-    close_min: int = Field(ge=0, le=24 * 60)
+    # null 表示该炉不单独配门、回退全店 08:00–22:00；开门须严格早于打烊
+    open_min: int | None = Field(default=None, ge=0, le=24 * 60)
+    close_min: int | None = Field(default=None, ge=0, le=24 * 60)
 
 
 class BatchOut(BaseModel):

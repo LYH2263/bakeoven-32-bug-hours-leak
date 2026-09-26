@@ -20,7 +20,8 @@ from app.services.oven_engine import (
     build_occupancies,
     find_conflicts,
     fits_operating_hours,
-    shop_wide_hours,
+    is_valid_door,
+    resolve_oven_hours,
     next_free_window,
 )
 
@@ -29,6 +30,33 @@ api_router = APIRouter()
 
 def _recipe(p: Product) -> RecipeDurations:
     return RecipeDurations(p.ferment_min, p.bake_min)
+
+
+_PHASE_LABEL = {"ferment": "发酵", "bake": "烘烤"}
+
+
+def _hm(minute: int) -> str:
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _out_of_hours_detail(oven: Oven, candidates: list[Occupancy]) -> str:
+    """话术点明是超出该炉自己的门，并指出探出的是哪一段。"""
+    lo, hi = resolve_oven_hours(oven.open_min, oven.close_min)
+    for cand in candidates:
+        iv = cand.interval
+        if iv.end <= iv.start:
+            continue
+        if iv.start < lo:
+            side = f"{_PHASE_LABEL.get(cand.phase, cand.phase)}段 {_hm(iv.start)} 早于开门 {_hm(lo)}"
+        elif iv.end > hi:
+            side = f"{_PHASE_LABEL.get(cand.phase, cand.phase)}段 {_hm(iv.end)} 晚于打烊 {_hm(hi)}"
+        else:
+            continue
+        return (
+            f"无法排入「{oven.label}」：{side}；该炉营业时段为半开区间 "
+            f"[{_hm(lo)}, {_hm(hi)})，整段占炉（发酵+烘烤）都须落在门内"
+        )
+    return f"无法排入「{oven.label}」：占炉时段超出该炉营业 [{_hm(lo)}, {_hm(hi)})"
 
 
 def _all_occupancies(db: Session) -> list[Occupancy]:
@@ -81,6 +109,13 @@ def update_oven_hours(oven_id: int, body: OvenHoursUpdate, db: Session = Depends
     oven = db.get(Oven, oven_id)
     if not oven:
         raise HTTPException(404, "炉位不存在")
+    if not is_valid_door(body.open_min, body.close_min):
+        if body.open_min is None or body.close_min is None:
+            raise HTTPException(400, "开门与打烊须同时填写，或同时清空以沿用全店 08:00–22:00")
+        raise HTTPException(
+            400,
+            f"非法营业时段：开门 {_hm(body.open_min)} 不早于打烊 {_hm(body.close_min)}，未保存",
+        )
     oven.open_min = body.open_min
     oven.close_min = body.close_min
     db.commit()
@@ -103,14 +138,16 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     recipe = _recipe(product)
     candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
     code = body.code or f"BO-{body.start_min}"
-        _ = fits_operating_hours(candidates, oven.open_min, oven.close_min)
+    if not fits_operating_hours(candidates, oven.open_min, oven.close_min):
+        raise HTTPException(422, _out_of_hours_detail(oven, candidates))
     existing = _all_occupancies(db)
     hits = find_conflicts(existing, candidates)
     if hits:
         ex, cand = hits[0]
         detail = (
-            f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
-            f"[{cand.interval.start},{cand.interval.end})"
+            f"该时段在「{oven.label}」与批次#{ex.batch_id} 的 "
+            f"{_PHASE_LABEL.get(ex.phase, ex.phase)}段重叠："
+            f"[{_hm(cand.interval.start)},{_hm(cand.interval.end)})"
         )
         db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail))
         db.commit()
@@ -164,7 +201,7 @@ def windows(product_id: int, db: Session = Depends(get_db)):
     existing = _all_occupancies(db)
     out: list[WindowOut] = []
     for oven in db.scalars(select(Oven).order_by(Oven.id)).all():
-        lo, hi = shop_wide_hours()
+        lo, hi = resolve_oven_hours(oven.open_min, oven.close_min)
         w = next_free_window(
             existing,
             oven.id,
